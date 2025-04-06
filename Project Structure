@@ -1,0 +1,10 @@
+AntiPhishingTool/
+│
+├── main.py                # Main Python script for running the tool
+├── requirements.txt       # Dependencies
+├── README.md              # Project documentation
+├── report.txt             # Final scan report (auto-generated)
+├── assets/                # Flowchart and presentation assets
+│   └── flowchart.png
+│   └── presentation.pptx
+└── LICENSE
