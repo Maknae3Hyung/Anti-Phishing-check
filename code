@@ -1,0 +1,140 @@
+import requests
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
+import json
+import time
+
+# === Configuration ===
+API_KEYS = {
+    'virustotal': '"your own API KEY',
+    'google_safe_browsing': 'Your own API KEY'
+}
+
+BLACKLIST = [
+    'malwaredomainlist.com',
+    'phishing.firn.de',
+    'urlvir.com',
+    'phishtank.com',
+    'spamhaus.org'
+]
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; AntiPhishBot/1.0)"
+}
+
+LOG_FILE = "scan_results.txt"
+
+# === Helper Functions ===
+
+def log_result(message):
+    with open(LOG_FILE, "a") as f:
+        f.write(message + "\n")
+    print(message)
+
+def get_inner_links(url):
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=5)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        base_url = "{0.scheme}://{0.netloc}".format(urlparse(url))
+        links = set()
+        for a_tag in soup.find_all("a", href=True):
+            link = urljoin(base_url, a_tag['href'])
+            if urlparse(link).scheme in ['http', 'https']:
+                links.add(link)
+        return links
+    except Exception as e:
+        log_result(f"[Error extracting links] {e}")
+        return set()
+
+def check_blacklist(url):
+    for blacklist_domain in BLACKLIST:
+        if blacklist_domain in url:
+            return True
+    return False
+
+def google_safe_browsing_check(url):
+    api_url = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={API_KEYS['google_safe_browsing']}"
+    payload = {
+        "client": {
+            "clientId": "yourcompanyname",
+            "clientVersion": "1.0"
+        },
+        "threatInfo": {
+            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE"],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}]
+        }
+    }
+    try:
+        response = requests.post(api_url, json=payload)
+        if response.json():
+            return True
+        return False
+    except Exception as e:
+        log_result(f"[Error in Google Safe Browsing API] {e}")
+        return False
+
+def virustotal_scan(url):
+    headers = {"x-apikey": API_KEYS['virustotal']}
+    api_url = f"https://www.virustotal.com/api/v3/urls"
+    try:
+        response = requests.post(api_url, headers=headers, data={'url': url})
+        if response.status_code == 200:
+            url_id = response.json()['data']['id']
+            time.sleep(15)  # Respect API rate limit
+            report_url = f"https://www.virustotal.com/api/v3/analyses/{url_id}"
+            report = requests.get(report_url, headers=headers).json()
+            stats = report['data']['attributes']['stats']
+            if stats['malicious'] > 0 or stats['suspicious'] > 0:
+                return True
+        return False
+    except Exception as e:
+        log_result(f"[Error in VirusTotal] {e}")
+        return False
+
+def header_analysis(url):
+    try:
+        response = requests.head(url, headers=HEADERS, timeout=5)
+        server = response.headers.get('Server', '')
+        if "cloudflare" in server.lower() or "unknown" in server.lower():
+            return True
+        return False
+    except Exception as e:
+        log_result(f"[Error in header analysis] {e}")
+        return False
+
+# === Main URL Checking Function ===
+
+def analyze_url(url):
+    log_result(f"\n--- Analyzing: {url} ---")
+    
+    is_blacklisted = check_blacklist(url)
+    is_google_flagged = google_safe_browsing_check(url)
+    is_virustotal_flagged = virustotal_scan(url)
+    is_header_suspicious = header_analysis(url)
+
+    verdict = "SAFE"
+    if is_blacklisted or is_google_flagged or is_virustotal_flagged or is_header_suspicious:
+        verdict = "MALICIOUS/SUSPICIOUS"
+    
+    log_result(f"Verdict for {url}: {verdict}")
+    log_result(f"Details -> Blacklist: {is_blacklisted}, Google Safe Browsing: {is_google_flagged}, VirusTotal: {is_virustotal_flagged}, Headers: {is_header_suspicious}")
+
+# === Main Function ===
+
+def main():
+    target_url = input("Enter the URL to scan: ")
+    log_result(f"\n[+] Starting scan for: {target_url}")
+    analyze_url(target_url)
+
+    inner_links = get_inner_links(target_url)
+    log_result(f"\n[+] Found {len(inner_links)} inner links. Scanning...")
+
+    for link in inner_links:
+        analyze_url(link)
+
+    log_result("[+] Scan completed.\nResults saved in scan_results.txt")
+
+if __name__ == "__main__":
+    main()
